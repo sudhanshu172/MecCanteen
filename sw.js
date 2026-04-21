@@ -41,33 +41,21 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('fetch', event => {
-  const { request } = event;
-  
-  // Network-first for Firebase/API calls
-  if (request.url.includes('firebaseio.com') || 
-      request.url.includes('googleapis.com') ||
-      request.url.includes('cloudfunctions.net')) {
-    event.respondWith(
-      fetch(request).catch(() => caches.match(request))
-    );
-    return;
+  // THE FIX: Bypass the Service Worker for Firebase and Firestore API requests
+  if (event.request.url.includes('firestore.googleapis.com') || 
+      event.request.url.includes('firebaseio.com') ||
+      event.request.url.includes('identitytoolkit.googleapis.com')) {
+    return; // Let the browser handle the live database connection normally
   }
-  
-  // Cache-first for static assets
-  if (request.mode === 'navigate' || request.destination === 'document') {
-    event.respondWith(
-      fetch(request)
-        .then(response => {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
-          return response;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
-  }
-  
+
   event.respondWith(
-    caches.match(request).then(response => response || fetch(request))
+    caches.match(event.request)
+      .then(response => {
+        // Cache hit - return response
+        if (response) {
+          return response;
+        }
+        return fetch(event.request);
+      })
   );
 });

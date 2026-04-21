@@ -372,11 +372,19 @@
 
       useEffect(() => {
         const unsubscribe = db.collection('menu_items')
-          .orderBy('category')
-          .orderBy('name')
+          // Removed the two orderBy() lines
           .onSnapshot(snapshot => {
             const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            
+            // Sort items locally in React
+            items.sort((a, b) => {
+              if (a.category === b.category) return a.name.localeCompare(b.name);
+              return a.category.localeCompare(b.category);
+            });
+            
             setMenuItems(items);
+          }, error => {
+            console.error("Menu fetch error:", error); // Added error logging
           });
         return unsubscribe;
       }, []);
@@ -720,11 +728,19 @@
       useEffect(() => {
         // Load menu items
         const unsubMenu = db.collection('menu_items')
-          .orderBy('category')
-          .orderBy('name')
+          // Removed the two orderBy() lines
           .onSnapshot(snapshot => {
             const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            
+            // Sort items locally in React
+            items.sort((a, b) => {
+              if (a.category === b.category) return a.name.localeCompare(b.name);
+              return a.category.localeCompare(b.category);
+            });
+            
             setMenuItems(items);
+          }, error => {
+            console.error("Menu fetch error:", error); // Added error logging
           });
 
         // Load settings
