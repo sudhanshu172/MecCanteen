@@ -1,6 +1,6 @@
 {
   "name": "Company Canteen - Order Management",
-  "short_name": "Canteen",
+  "short_name": "MecCanteen",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#ecfdf5",
