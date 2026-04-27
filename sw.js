@@ -1,8 +1,8 @@
 // ============================================================
-// Service Worker — Company Canteen v1
+// Service Worker — Mecon Canteen v2
 // Bump CACHE_VERSION when deploying updates.
 // ============================================================
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const CACHE_NAME = `canteen-app-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
