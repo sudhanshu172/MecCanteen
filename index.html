@@ -13,7 +13,8 @@
                    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
                    font-src https://fonts.gstatic.com;
                    connect-src https://firestore.googleapis.com https://*.firebaseio.com https://*.googleapis.com wss://*.firebaseio.com https://*.cloudfunctions.net;
-                   img-src 'self' data:;">
+                   img-src 'self' data: blob:;
+                   media-src blob:;">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta name="referrer" content="strict-origin-when-cross-origin">
 
@@ -36,6 +37,10 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- QR Code Libraries -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 </head>
 
 <body>
@@ -61,7 +66,7 @@
     };
 
     // Initialize Firebase
-    
+
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
     const auth = firebase.auth();
@@ -97,6 +102,15 @@
       'Assistant Manager'
     ];
 
+    // Time schedule defaults per category
+    const TIME_DEFAULTS = {
+      'Breakfast': { from: '09:00', to: '11:00' },
+      'Lunch': { from: '12:30', to: '15:00' },
+      'Snacks': { from: '16:30', to: '18:00' },
+      'Dinner': { from: '19:30', to: '22:00' },
+      'Beverages': { from: '', to: '' }
+    };
+
     // ============================================================
     // HELPER FUNCTIONS
     // ============================================================
@@ -112,6 +126,57 @@
 
     const formatPrice = (price) => {
       return `₹${parseFloat(price).toFixed(2)}`;
+    };
+
+    // Check if current time is within a from-to schedule (HH:MM 24hr strings)
+    const isWithinTimeSchedule = (from, to) => {
+      if (!from || !to) return true; // No schedule = always available
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const [fH, fM] = from.split(':').map(Number);
+      const [tH, tM] = to.split(':').map(Number);
+      const fromMinutes = fH * 60 + fM;
+      const toMinutes = tH * 60 + tM;
+      if (toMinutes >= fromMinutes) {
+        return currentMinutes >= fromMinutes && currentMinutes <= toMinutes;
+      }
+      // Handles overnight ranges (e.g., 22:00 - 02:00)
+      return currentMinutes >= fromMinutes || currentMinutes <= toMinutes;
+    };
+
+    // Format 24hr time string to 12hr display
+    const formatTime12 = (timeStr) => {
+      if (!timeStr) return '';
+      const [h, m] = timeStr.split(':').map(Number);
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      const h12 = h % 12 || 12;
+      return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+    };
+
+    // Generate QR code data URL from text
+    const generateQRDataUrl = (text, cellSize = 6) => {
+      try {
+        if (typeof qrcode === 'undefined') return null;
+        const qr = qrcode(0, 'M');
+        qr.addData(text);
+        qr.make();
+        return qr.createDataURL(cellSize, 0);
+      } catch (e) {
+        console.error('QR generation error:', e);
+        return null;
+      }
+    };
+
+    // Get next delivery man ID (DL001, DL002, ...)
+    const getNextDeliveryId = async () => {
+      const snapshot = await db.collection('canteen_users')
+        .where('role', '==', 'delivery').get();
+      let maxNum = 0;
+      snapshot.docs.forEach(doc => {
+        const num = parseInt(doc.id.replace('DL', ''), 10);
+        if (!isNaN(num) && num > maxNum) maxNum = num;
+      });
+      return `DL${(maxNum + 1).toString().padStart(3, '0')}`;
     };
 
     // Initialize Admin and Cadmin users
@@ -156,6 +221,9 @@
             orderingEnabled: true,
             canteenInchargePhone: '9876543210',
             canteenInchargeName: 'Canteen In-charge',
+            minOrderValue: 50,
+            deliveryFee: 25,
+            freeDeliveryAbove: 149,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
           console.log('✓ Canteen settings initialized');
@@ -189,8 +257,14 @@
       AlertCircle: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></svg>,
       Upload: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>,
       Settings: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>,
-      Menu: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>,
+      Menu: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h18M3 6h18M3 18h18" /></svg>,
       Package: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="16.5" y1="9.4" x2="7.5" y2="4.21" /><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" /><polyline points="3.27 6.96 12 12.01 20.73 6.96" /><line x1="12" y1="22.08" x2="12" y2="12" /></svg>,
+      Truck: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13" /><polygon points="16 8 20 8 23 11 23 16 16 16 16 8" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></svg>,
+      MapPin: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>,
+      QrCode: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="3" height="3" /><line x1="21" y1="14" x2="21" y2="14.01" /><line x1="21" y1="21" x2="21" y2="21.01" /><line x1="17" y1="21" x2="17" y2="21.01" /></svg>,
+      Camera: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></svg>,
+      Scan: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2" /><path d="M17 3h2a2 2 0 0 1 2 2v2" /><path d="M21 17v2a2 2 0 0 1-2 2h-2" /><path d="M7 21H5a2 2 0 0 1-2-2v-2" /><line x1="7" y1="12" x2="17" y2="12" /></svg>,
+      Home: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>,
     };
 
     // ============================================================
@@ -223,7 +297,7 @@
       const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
-        
+
         const validationError = validateForm();
         if (validationError) {
           setError(validationError);
@@ -286,51 +360,51 @@
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div className="form-group">
                 <label>Full Name *</label>
-                <input 
-                  type="text" 
-                  value={formData.name} 
+                <input
+                  type="text"
+                  value={formData.name}
                   onChange={e => handleChange('name', e.target.value)}
                   placeholder="Enter your full name"
-                  required 
+                  required
                 />
               </div>
               <div className="form-group">
                 <label>Personnel No. * (5 characters)</label>
-                <input 
-                  type="text" 
-                  value={formData.personnelNo} 
+                <input
+                  type="text"
+                  value={formData.personnelNo}
                   onChange={e => handleChange('personnelNo', e.target.value.toUpperCase())}
                   placeholder="e.g., A1234"
                   maxLength="5"
-                  required 
+                  required
                   style={{ textTransform: 'uppercase' }}
                 />
               </div>
               <div className="form-group">
                 <label>Phone Number * (10 digits)</label>
-                <input 
-                  type="tel" 
-                  value={formData.phone} 
+                <input
+                  type="tel"
+                  value={formData.phone}
                   onChange={e => handleChange('phone', e.target.value.replace(/\D/g, ''))}
                   placeholder="Enter 10 digit mobile number"
                   maxLength="10"
-                  required 
+                  required
                 />
               </div>
               <div className="form-group">
                 <label>Email Address *</label>
-                <input 
-                  type="email" 
-                  value={formData.email} 
+                <input
+                  type="email"
+                  value={formData.email}
                   onChange={e => handleChange('email', e.target.value)}
                   placeholder="your.email@company.com"
-                  required 
+                  required
                 />
               </div>
               <div className="form-group">
                 <label>Designation *</label>
-                <select 
-                  value={formData.designation} 
+                <select
+                  value={formData.designation}
                   onChange={e => handleChange('designation', e.target.value)}
                   required
                 >
@@ -363,7 +437,9 @@
         description: '',
         price: '',
         category: 'Breakfast',
-        available: true
+        available: true,
+        availableFrom: TIME_DEFAULTS['Breakfast'].from,
+        availableTo: TIME_DEFAULTS['Breakfast'].to
       });
       const [error, setError] = useState('');
       const [success, setSuccess] = useState('');
@@ -375,13 +451,13 @@
           // Removed the two orderBy() lines
           .onSnapshot(snapshot => {
             const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            
+
             // Sort items locally in React
             items.sort((a, b) => {
               if (a.category === b.category) return a.name.localeCompare(b.name);
               return a.category.localeCompare(b.category);
             });
-            
+
             setMenuItems(items);
           }, error => {
             console.error("Menu fetch error:", error); // Added error logging
@@ -418,7 +494,7 @@
             setSuccess('Menu item added successfully');
           }
 
-          setFormData({ name: '', description: '', price: '', category: 'Breakfast', available: true });
+          setFormData({ name: '', description: '', price: '', category: 'Breakfast', available: true, availableFrom: TIME_DEFAULTS['Breakfast'].from, availableTo: TIME_DEFAULTS['Breakfast'].to });
           setEditingItem(null);
           setShowAddForm(false);
         } catch (err) {
@@ -432,7 +508,9 @@
           description: item.description || '',
           price: item.price.toString(),
           category: item.category,
-          available: item.available
+          available: item.available,
+          availableFrom: item.availableFrom || TIME_DEFAULTS[item.category]?.from || '',
+          availableTo: item.availableTo || TIME_DEFAULTS[item.category]?.to || ''
         });
         setEditingItem(item);
         setShowAddForm(true);
@@ -447,9 +525,9 @@
         try {
           // 2. Perform the actual deletion in the background
           await db.collection('menu_items').doc(itemId).delete();
-          
+
           setSuccess('Menu item deleted successfully');
-          
+
           // Auto-hide the success message after 3 seconds
           setTimeout(() => setSuccess(''), 3000);
         } catch (err) {
@@ -459,7 +537,7 @@
 
       const toggleAvailability = async (item) => {
         // 1. OPTIMISTIC UI: Instantly flip the visual switch so it doesn't look stuck
-        setMenuItems(prevItems => 
+        setMenuItems(prevItems =>
           prevItems.map(m => m.id === item.id ? { ...m, available: !item.available } : m)
         );
 
@@ -470,12 +548,12 @@
             updatedBy: currentUser.name,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp()
           });
-          
+
           setSuccess(`"${item.name}" marked as ${!item.available ? 'Available' : 'Unavailable'}`);
-          setTimeout(() => setSuccess(''), 3000); 
+          setTimeout(() => setSuccess(''), 3000);
         } catch (err) {
           // 3. If the database fails (e.g., internet disconnects), snap the visual toggle back
-          setMenuItems(prevItems => 
+          setMenuItems(prevItems =>
             prevItems.map(m => m.id === item.id ? { ...m, available: item.available } : m)
           );
           setError('Failed to update: ' + err.message);
@@ -497,7 +575,7 @@
         <div style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Menu Management</h2>
-            <button onClick={() => { setShowAddForm(!showAddForm); setEditingItem(null); setFormData({ name: '', description: '', price: '', category: 'Breakfast', available: true }); }} className="btn-primary">
+            <button onClick={() => { setShowAddForm(!showAddForm); setEditingItem(null); setFormData({ name: '', description: '', price: '', category: 'Breakfast', available: true, availableFrom: TIME_DEFAULTS['Breakfast'].from, availableTo: TIME_DEFAULTS['Breakfast'].to }); }} className="btn-primary">
               <Icons.Plus /> {showAddForm ? 'Cancel' : 'Add Item'}
             </button>
           </div>
@@ -517,7 +595,11 @@
                 </div>
                 <div className="form-group">
                   <label>Category *</label>
-                  <select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} required>
+                  <select value={formData.category} onChange={e => {
+                    const cat = e.target.value;
+                    const defaults = TIME_DEFAULTS[cat] || { from: '', to: '' };
+                    setFormData({ ...formData, category: cat, availableFrom: defaults.from, availableTo: defaults.to });
+                  }} required>
                     {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                   </select>
                 </div>
@@ -528,6 +610,14 @@
                 <div className="form-group">
                   <label>Description</label>
                   <input type="text" value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Available From (optional)</label>
+                  <input type="time" value={formData.availableFrom} onChange={e => setFormData({ ...formData, availableFrom: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label>Available To (optional)</label>
+                  <input type="time" value={formData.availableTo} onChange={e => setFormData({ ...formData, availableTo: e.target.value })} />
                 </div>
                 <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <input type="checkbox" id="available" checked={formData.available} onChange={e => setFormData({ ...formData, available: e.target.checked })} />
@@ -557,7 +647,14 @@
                           </span>
                         </div>
                         {item.description && <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>{item.description}</p>}
-                        <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--primary)' }}>{formatPrice(item.price)}</p>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <p style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--primary)' }}>{formatPrice(item.price)}</p>
+                          {item.availableFrom && item.availableTo && (
+                            <span className="badge-primary" style={{ fontSize: '0.7rem' }}>
+                              <Icons.Clock /> {formatTime12(item.availableFrom)} – {formatTime12(item.availableTo)}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
                         <button onClick={() => toggleAvailability(item)} className="icon-button" title={item.available ? 'Mark Unavailable' : 'Mark Available'}>
@@ -677,7 +774,7 @@
       return (
         <div style={{ padding: '1.5rem' }}>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Personnel Management</h2>
-          
+
           {error && <div className="alert-warning" style={{ marginBottom: '1rem' }}>{error}</div>}
           {success && <div className="alert-success" style={{ marginBottom: '1rem' }}>{success}</div>}
 
@@ -687,10 +784,10 @@
               Upload a CSV file with personnel numbers. Format: First column should contain 5-character personnel numbers.
             </p>
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-              <input 
-                type="file" 
-                accept=".csv" 
-                onChange={handleFileUpload} 
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleFileUpload}
                 disabled={uploading}
                 style={{ flex: 1 }}
               />
@@ -721,18 +818,166 @@
     }
 
     // ============================================================
+    // DELIVERY MAN MANAGEMENT (Admin/Canteen Incharge)
+    // ============================================================
+    function DeliveryManManagement() {
+      const [deliveryStaff, setDeliveryStaff] = useState([]);
+      const [showForm, setShowForm] = useState(false);
+      const [formData, setFormData] = useState({ name: '', phone: '', address: '' });
+      const [error, setError] = useState('');
+      const [success, setSuccess] = useState('');
+      const [loading, setLoading] = useState(false);
+
+      useEffect(() => {
+        const unsubscribe = db.collection('canteen_users')
+          .where('role', '==', 'delivery')
+          .onSnapshot(snapshot => {
+            const staff = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            staff.sort((a, b) => a.id.localeCompare(b.id));
+            setDeliveryStaff(staff);
+          });
+        return unsubscribe;
+      }, []);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setError(''); setSuccess('');
+
+        if (!formData.name.trim()) { setError('Name is required'); return; }
+        if (!/^\d{10}$/.test(formData.phone)) { setError('Phone must be 10 digits'); return; }
+        if (!formData.address.trim()) { setError('Address is required'); return; }
+
+        setLoading(true);
+        try {
+          const deliveryId = await getNextDeliveryId();
+          const email = `${deliveryId}@canteen.internal`;
+
+          // Create Firebase Auth user
+          await secondaryAuth.createUserWithEmailAndPassword(email, DEFAULT_PASSWORD);
+          await secondaryAuth.signOut();
+
+          // Create Firestore user document
+          await db.collection('canteen_users').doc(deliveryId).set({
+            id: deliveryId,
+            personnelNo: deliveryId,
+            name: formData.name,
+            phone: formData.phone,
+            address: formData.address,
+            email: email,
+            designation: 'Delivery Staff',
+            role: 'delivery',
+            requiresPasswordChange: true,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+
+          setSuccess(`Delivery account created! ID: ${deliveryId}, Password: ${DEFAULT_PASSWORD}`);
+          setFormData({ name: '', phone: '', address: '' });
+          setShowForm(false);
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleDelete = async (staff) => {
+        if (!confirm(`Delete delivery account ${staff.id} (${staff.name})?`)) return;
+        try {
+          await db.collection('canteen_users').doc(staff.id).delete();
+          setSuccess(`Deleted ${staff.id}`);
+          setTimeout(() => setSuccess(''), 3000);
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      return (
+        <div style={{ padding: '1.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Delivery Staff Management</h2>
+            <button onClick={() => setShowForm(!showForm)} className="btn-primary">
+              <Icons.Plus /> {showForm ? 'Cancel' : 'Add Delivery Man'}
+            </button>
+          </div>
+
+          {error && <div className="alert-warning" style={{ marginBottom: '1rem' }}>{error}</div>}
+          {success && <div className="alert-success" style={{ marginBottom: '1rem' }}>{success}</div>}
+
+          {showForm && (
+            <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem' }}>Create Delivery Man Account</h3>
+              <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                <div className="form-group">
+                  <label>Full Name *</label>
+                  <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} required placeholder="Enter name" />
+                </div>
+                <div className="form-group">
+                  <label>Phone Number * (10 digits)</label>
+                  <input type="tel" value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value.replace(/\D/g, '') })} maxLength="10" required placeholder="10-digit mobile" />
+                </div>
+                <div className="form-group">
+                  <label>Address *</label>
+                  <input type="text" value={formData.address} onChange={e => setFormData({ ...formData, address: e.target.value })} required placeholder="e.g., Quarter B-12, Block B" />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                  <button type="submit" className="btn-primary" disabled={loading}>
+                    {loading ? 'Creating...' : 'Create Account'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          <div className="glass-panel" style={{ padding: '1.5rem' }}>
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem' }}>
+              <Icons.Truck /> Delivery Personnel ({deliveryStaff.length})
+            </h3>
+            {deliveryStaff.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)' }}>No delivery staff created yet.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                {deliveryStaff.map(staff => (
+                  <div key={staff.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'var(--surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--primary)' }}>{staff.id}</span>
+                        <span style={{ fontWeight: 600 }}>{staff.name}</span>
+                      </div>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        📞 {staff.phone} | 📍 {staff.address}
+                      </p>
+                    </div>
+                    <button onClick={() => handleDelete(staff)} className="icon-button" title="Delete">
+                      <Icons.Trash />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ============================================================
     // USER ORDERING COMPONENT
     // ============================================================
     function UserOrdering({ currentUser }) {
       const [menuItems, setMenuItems] = useState([]);
       const [cart, setCart] = useState({});
       const [myOrders, setMyOrders] = useState([]);
-      const [activeTab, setActiveTab] = useState('menu'); // menu, cart, orders
+      const [activeTab, setActiveTab] = useState('menu');
       const [settings, setSettings] = useState(null);
       const [error, setError] = useState('');
       const [success, setSuccess] = useState('');
       const [otpInput, setOtpInput] = useState('');
       const [selectedOrder, setSelectedOrder] = useState(null);
+      // Address state
+      const [savedAddresses, setSavedAddresses] = useState(currentUser.savedAddresses || []);
+      const [selectedAddressId, setSelectedAddressId] = useState((currentUser.savedAddresses || []).find(a => a.isDefault)?.id || '');
+      const [showAddAddress, setShowAddAddress] = useState(false);
+      const [newAddress, setNewAddress] = useState({ quarterNo: '', block: '', label: '' });
+      const [editingAddress, setEditingAddress] = useState(null);
 
       useEffect(() => {
         // Load menu items
@@ -740,13 +985,13 @@
           // Removed the two orderBy() lines
           .onSnapshot(snapshot => {
             const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            
+
             // Sort items locally in React
             items.sort((a, b) => {
               if (a.category === b.category) return a.name.localeCompare(b.name);
               return a.category.localeCompare(b.category);
             });
-            
+
             setMenuItems(items);
           }, error => {
             console.error("Menu fetch error:", error); // Added error logging
@@ -757,8 +1002,6 @@
           .onSnapshot(doc => {
             if (doc.exists) setSettings(doc.data());
           });
-
-        // Load my orders
         // Load my orders
         const unsubOrders = db.collection('orders')
           .where('userId', '==', currentUser.id)
@@ -783,7 +1026,8 @@
         };
       }, [currentUser.id]);
 
-      const availableItems = useMemo(() => menuItems.filter(item => item.available), [menuItems]);
+      const availableItems = useMemo(() => menuItems.filter(item => item.available && isWithinTimeSchedule(item.availableFrom, item.availableTo)), [menuItems]);
+      const scheduledLaterItems = useMemo(() => menuItems.filter(item => item.available && !isWithinTimeSchedule(item.availableFrom, item.availableTo)), [menuItems]);
       const unavailableItems = useMemo(() => menuItems.filter(item => !item.available), [menuItems]);
 
       const addToCart = (item) => {
@@ -813,71 +1057,80 @@
       };
 
       const cartItems = Object.values(cart);
-      const cartTotal = cartItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      const cartSubtotal = cartItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      const deliveryFee = settings && cartSubtotal < (settings.freeDeliveryAbove ?? 149) ? (settings.deliveryFee ?? 25) : 0;
+      const cartTotal = cartSubtotal + deliveryFee;
+      const minOrderValue = settings?.minOrderValue ?? 50;
+      const isBelowMin = cartSubtotal < minOrderValue && cartItems.length > 0;
 
       const placeOrder = async () => {
-        if (cartItems.length === 0) {
-          setError('Cart is empty');
-          return;
-        }
-
-        if (!settings?.orderingEnabled) {
-          setError('Ordering is currently disabled by canteen in-charge');
-          return;
-        }
+        if (cartItems.length === 0) { setError('Cart is empty'); return; }
+        if (!settings?.orderingEnabled) { setError('Ordering is currently disabled by canteen in-charge'); return; }
+        if (isBelowMin) { setError(`Minimum order value is ${formatPrice(minOrderValue)}`); return; }
+        const selectedAddr = savedAddresses.find(a => a.id === selectedAddressId);
+        if (!selectedAddr) { setError('Please select a delivery address'); return; }
 
         try {
           const orderId = generateOrderId();
           const otp = generateOTP();
-
           await db.collection('orders').add({
-            orderId,
-            userId: currentUser.id,
-            userName: currentUser.name,
-            userPhone: currentUser.phone,
-            items: cartItems.map(item => ({
-              id: item.id,
-              name: item.name,
-              price: item.price,
-              quantity: item.quantity
-            })),
+            orderId, userId: currentUser.id, userName: currentUser.name, userPhone: currentUser.phone,
+            items: cartItems.map(item => ({ id: item.id, name: item.name, price: item.price, quantity: item.quantity })),
+            subtotalAmount: cartSubtotal,
+            deliveryFee: deliveryFee,
             totalAmount: cartTotal,
             deliveryOTP: otp,
-            status: 'pending', // pending, preparing, ready, delivered
+            deliveryAddress: { quarterNo: selectedAddr.quarterNo, block: selectedAddr.block, label: selectedAddr.label },
+            status: 'pending',
             canteenInchargePhone: settings.canteenInchargePhone,
             canteenInchargeName: settings.canteenInchargeName,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
           });
-
           setSuccess(`Order placed! Order ID: ${orderId}, Your OTP: ${otp}`);
           setCart({});
           setActiveTab('orders');
-        } catch (err) {
-          setError(err.message);
-        }
+        } catch (err) { setError(err.message); }
       };
 
       const verifyAndDeliver = async (order) => {
-        if (!otpInput) {
-          setError('Please enter OTP');
-          return;
-        }
-        if (otpInput !== order.deliveryOTP) {
-          setError('Invalid OTP');
-          return;
-        }
-
+        if (!otpInput) { setError('Please enter OTP'); return; }
+        if (otpInput !== order.deliveryOTP) { setError('Invalid OTP'); return; }
         try {
-          await db.collection('orders').doc(order.id).update({
-            status: 'delivered',
-            deliveredAt: firebase.firestore.FieldValue.serverTimestamp()
-          });
+          await db.collection('orders').doc(order.id).update({ status: 'delivered', deliveredAt: firebase.firestore.FieldValue.serverTimestamp() });
           setSuccess('Order marked as delivered!');
-          setOtpInput('');
-          setSelectedOrder(null);
-        } catch (err) {
-          setError(err.message);
+          setOtpInput(''); setSelectedOrder(null);
+        } catch (err) { setError(err.message); }
+      };
+
+      // Address management functions
+      const saveAddress = async (addr) => {
+        const addrWithId = { ...addr, id: addr.id || `addr_${Date.now()}` };
+        let updated;
+        if (editingAddress) {
+          updated = savedAddresses.map(a => a.id === editingAddress.id ? addrWithId : a);
+        } else {
+          if (savedAddresses.length === 0) addrWithId.isDefault = true;
+          updated = [...savedAddresses, addrWithId];
         }
+        setSavedAddresses(updated);
+        if (!selectedAddressId && updated.length === 1) setSelectedAddressId(addrWithId.id);
+        await db.collection('canteen_users').doc(currentUser.id).update({ savedAddresses: updated });
+        setNewAddress({ quarterNo: '', block: '', label: '' });
+        setShowAddAddress(false); setEditingAddress(null);
+        setSuccess(editingAddress ? 'Address updated' : 'Address saved');
+        setTimeout(() => setSuccess(''), 2000);
+      };
+      const deleteAddress = async (addrId) => {
+        const updated = savedAddresses.filter(a => a.id !== addrId);
+        setSavedAddresses(updated);
+        if (selectedAddressId === addrId) setSelectedAddressId(updated[0]?.id || '');
+        await db.collection('canteen_users').doc(currentUser.id).update({ savedAddresses: updated });
+      };
+      const setDefaultAddress = async (addrId) => {
+        const updated = savedAddresses.map(a => ({ ...a, isDefault: a.id === addrId }));
+        setSavedAddresses(updated);
+        setSelectedAddressId(addrId);
+        await db.collection('canteen_users').doc(currentUser.id).update({ savedAddresses: updated });
       };
 
       const groupedAvailable = useMemo(() => {
@@ -893,12 +1146,12 @@
         <div style={{ padding: '1.5rem' }}>
           {/* Tab Navigation */}
           <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '2px solid var(--border)' }}>
-            <button 
-              onClick={() => setActiveTab('menu')} 
-              style={{ 
-                padding: '0.75rem 1.5rem', 
-                background: 'none', 
-                border: 'none', 
+            <button
+              onClick={() => setActiveTab('menu')}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'none',
+                border: 'none',
                 borderBottom: activeTab === 'menu' ? '2px solid var(--primary)' : 'none',
                 color: activeTab === 'menu' ? 'var(--primary)' : 'var(--text-secondary)',
                 fontWeight: 600,
@@ -907,12 +1160,12 @@
             >
               <Icons.Menu /> Menu
             </button>
-            <button 
-              onClick={() => setActiveTab('cart')} 
-              style={{ 
-                padding: '0.75rem 1.5rem', 
-                background: 'none', 
-                border: 'none', 
+            <button
+              onClick={() => setActiveTab('cart')}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'none',
+                border: 'none',
                 borderBottom: activeTab === 'cart' ? '2px solid var(--primary)' : 'none',
                 color: activeTab === 'cart' ? 'var(--primary)' : 'var(--text-secondary)',
                 fontWeight: 600,
@@ -921,12 +1174,12 @@
             >
               <Icons.ShoppingCart /> Cart ({cartItems.length})
             </button>
-            <button 
-              onClick={() => setActiveTab('orders')} 
-              style={{ 
-                padding: '0.75rem 1.5rem', 
-                background: 'none', 
-                border: 'none', 
+            <button
+              onClick={() => setActiveTab('orders')}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'none',
+                border: 'none',
                 borderBottom: activeTab === 'orders' ? '2px solid var(--primary)' : 'none',
                 color: activeTab === 'orders' ? 'var(--primary)' : 'var(--text-secondary)',
                 fontWeight: 600,
@@ -934,6 +1187,20 @@
               }}
             >
               <Icons.Package /> My Orders
+            </button>
+            <button
+              onClick={() => setActiveTab('profile')}
+              style={{
+                padding: '0.75rem 1.5rem',
+                background: 'none',
+                border: 'none',
+                borderBottom: activeTab === 'profile' ? '2px solid var(--primary)' : 'none',
+                color: activeTab === 'profile' ? 'var(--primary)' : 'var(--text-secondary)',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <Icons.User /> Profile
             </button>
           </div>
 
@@ -968,6 +1235,26 @@
                   </div>
                 </div>
               ))}
+
+              {scheduledLaterItems.length > 0 && (
+                <div style={{ marginTop: '3rem' }}>
+                  <h3 style={{ fontSize: '1.2rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--text-muted)' }}>Available Later</h3>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem', opacity: 0.7 }}>
+                    {scheduledLaterItems.map(item => (
+                      <div key={item.id} className="glass-panel" style={{ padding: '1rem' }}>
+                        <h4 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.25rem' }}>{item.name}</h4>
+                        {item.description && <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>{item.description}</p>}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem' }}>
+                          <span style={{ fontSize: '1.1rem', fontWeight: 600 }}>{formatPrice(item.price)}</span>
+                          <span className="badge-primary" style={{ fontSize: '0.7rem' }}>
+                            <Icons.Clock /> {formatTime12(item.availableFrom)} – {formatTime12(item.availableTo)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {unavailableItems.length > 0 && (
                 <div style={{ marginTop: '3rem' }}>
@@ -1025,12 +1312,124 @@
                     ))}
                   </div>
 
+                  <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Icons.MapPin /> Delivery Address
+                    </h3>
+                    {savedAddresses.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <select
+                          value={selectedAddressId}
+                          onChange={(e) => {
+                            if (e.target.value === 'new') {
+                              setShowAddAddress(true);
+                            } else {
+                              setSelectedAddressId(e.target.value);
+                              setShowAddAddress(false);
+                            }
+                          }}
+                          style={{ padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}
+                        >
+                          <option value="" disabled>Select an address...</option>
+                          {savedAddresses.map(addr => (
+                            <option key={addr.id} value={addr.id}>
+                              {addr.label ? `${addr.label}: ` : ''}{addr.quarterNo}, {addr.block}
+                            </option>
+                          ))}
+                          <option value="new">+ Add New Address</option>
+                        </select>
+                      </div>
+                    ) : (
+                      <div>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>No saved addresses. Please add one.</p>
+                        {!showAddAddress && (
+                          <button onClick={() => setShowAddAddress(true)} className="btn-secondary" style={{ width: '100%' }}>
+                            <Icons.Plus /> Add Delivery Address
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {showAddAddress && (
+                      <div style={{ marginTop: '1rem', padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem' }}>New Address</h4>
+                        <div style={{ display: 'grid', gap: '0.75rem' }}>
+                          <input
+                            type="text"
+                            placeholder="Quarter No. (e.g., B-12)"
+                            value={newAddress.quarterNo}
+                            onChange={e => setNewAddress({ ...newAddress, quarterNo: e.target.value })}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Block (e.g., Block B)"
+                            value={newAddress.block}
+                            onChange={e => setNewAddress({ ...newAddress, block: e.target.value })}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Label (e.g., Home, Office) - Optional"
+                            value={newAddress.label}
+                            onChange={e => setNewAddress({ ...newAddress, label: e.target.value })}
+                          />
+                          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                            <button
+                              onClick={() => {
+                                if (!newAddress.quarterNo || !newAddress.block) {
+                                  setError('Quarter No. and Block are required');
+                                  return;
+                                }
+                                saveAddress(newAddress);
+                              }}
+                              className="btn-primary"
+                              style={{ flex: 1 }}
+                            >
+                              Save Address
+                            </button>
+                            <button onClick={() => setShowAddAddress(false)} className="btn-secondary">
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="glass-panel" style={{ padding: '1.5rem', background: 'var(--primary-subtle)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                      <span style={{ fontSize: '1rem', color: 'var(--text-secondary)' }}>Subtotal</span>
+                      <span style={{ fontSize: '1.1rem', fontWeight: 600 }}>{formatPrice(cartSubtotal)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', paddingBottom: '1rem', borderBottom: '1px solid rgba(5,150,105,0.2)' }}>
+                      <span style={{ fontSize: '1rem', color: 'var(--text-secondary)' }}>Delivery Fee</span>
+                      {deliveryFee === 0 ? (
+                        <span className="badge-success">Free Delivery</span>
+                      ) : (
+                        <span style={{ fontSize: '1.1rem', fontWeight: 600 }}>{formatPrice(deliveryFee)}</span>
+                      )}
+                    </div>
+                    {deliveryFee > 0 && settings?.freeDeliveryAbove && (
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1rem', textAlign: 'right' }}>
+                        Add {formatPrice(settings.freeDeliveryAbove - cartSubtotal)} more for free delivery
+                      </p>
+                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                       <span style={{ fontSize: '1.2rem', fontWeight: 600 }}>Total</span>
                       <span style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--primary)' }}>{formatPrice(cartTotal)}</span>
                     </div>
-                    <button onClick={placeOrder} className="btn-primary" style={{ width: '100%' }} disabled={!settings?.orderingEnabled}>
+
+                    {isBelowMin && (
+                      <div className="alert-warning" style={{ marginBottom: '1rem' }}>
+                        <Icons.AlertCircle /> Minimum order value is {formatPrice(minOrderValue)}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={placeOrder}
+                      className="btn-primary"
+                      style={{ width: '100%' }}
+                      disabled={!settings?.orderingEnabled || isBelowMin || cartItems.length === 0}
+                    >
                       Place Order
                     </button>
                   </div>
@@ -1068,33 +1467,59 @@
 
                       <div style={{ marginBottom: '1rem' }}>
                         {order.items.map((item, idx) => (
-                          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: idx < order.items.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
                             <span>{item.name} × {item.quantity}</span>
                             <span>{formatPrice(item.price * item.quantity)}</span>
                           </div>
                         ))}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', color: 'var(--text-secondary)' }}>
+                          <span>Subtotal</span>
+                          <span>{formatPrice(order.subtotalAmount || order.totalAmount)}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                          <span>Delivery Fee</span>
+                          <span>{order.deliveryFee ? formatPrice(order.deliveryFee) : 'Free'}</span>
+                        </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', fontWeight: 600, fontSize: '1.1rem', borderTop: '2px solid var(--border)', marginTop: '0.5rem' }}>
                           <span>Total</span>
                           <span style={{ color: 'var(--primary)' }}>{formatPrice(order.totalAmount)}</span>
                         </div>
                       </div>
 
+                      {order.deliveryAddress && (
+                        <div style={{ background: 'var(--background)', padding: '0.75rem', borderRadius: '0.375rem', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                          <h5 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                            <Icons.MapPin /> Delivery Address
+                          </h5>
+                          <p style={{ fontSize: '0.85rem' }}>
+                            {order.deliveryAddress.label && <span style={{ fontWeight: 600 }}>{order.deliveryAddress.label}: </span>}
+                            Quarter {order.deliveryAddress.quarterNo}, {order.deliveryAddress.block}
+                          </p>
+                        </div>
+                      )}
+
                       <div style={{ background: 'var(--surface)', padding: '1rem', borderRadius: '0.375rem', marginBottom: '1rem' }}>
                         <p style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
                           <strong>Canteen Contact:</strong> {order.canteenInchargeName} - {order.canteenInchargePhone}
                         </p>
                         {order.status !== 'delivered' && (
-                          <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary)' }}>
-                            Your Delivery OTP: {order.deliveryOTP}
-                          </p>
+                          <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+                            <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                              Scan to confirm delivery:
+                            </p>
+                            <img src={generateQRDataUrl(order.orderId)} alt="Delivery QR Code" style={{ display: 'block', margin: '0 auto 0.5rem', width: '120px', height: '120px' }} />
+                            <p style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary)' }}>
+                              Or provide OTP: {order.deliveryOTP}
+                            </p>
+                          </div>
                         )}
                       </div>
 
                       {order.status !== 'delivered' && (
                         <div style={{ display: 'flex', gap: '0.5rem' }}>
-                          <input 
-                            type="text" 
-                            placeholder="Enter OTP to confirm delivery" 
+                          <input
+                            type="text"
+                            placeholder="Enter OTP to confirm delivery"
                             value={selectedOrder === order.id ? otpInput : ''}
                             onChange={e => { setSelectedOrder(order.id); setOtpInput(e.target.value); setError(''); }}
                             maxLength="4"
@@ -1117,7 +1542,92 @@
               )}
             </div>
           )}
+
+          {/* PROFILE TAB */}
+          {activeTab === 'profile' && (
+        <div className="glass-panel" style={{ padding: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
+            <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: 'var(--primary-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)' }}>
+              <Icons.User />
+            </div>
+            <div>
+              <h3 style={{ fontSize: '1.3rem', fontWeight: 600 }}>{currentUser.name}</h3>
+              <p style={{ color: 'var(--text-secondary)' }}>ID: {currentUser.personnelNo}</p>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: '2rem' }}>
+            <h4 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>Personal Details</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+              <div>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Phone</label>
+                <p style={{ fontWeight: 500 }}>{currentUser.phone || 'N/A'}</p>
+              </div>
+              <div>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Designation</label>
+                <p style={{ fontWeight: 500 }}>{currentUser.designation}</p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.5rem' }}>
+              <h4 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Saved Addresses</h4>
+              <button onClick={() => { setEditingAddress(null); setNewAddress({ quarterNo: '', block: '', label: '' }); setShowAddAddress(true); }} className="icon-button" style={{ color: 'var(--primary)' }}>
+                <Icons.Plus /> Add
+              </button>
+            </div>
+
+            {showAddAddress && (
+              <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                <h5 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem' }}>{editingAddress ? 'Edit Address' : 'New Address'}</h5>
+                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                  <input type="text" placeholder="Quarter No. (e.g., B-12)" value={newAddress.quarterNo} onChange={e => setNewAddress({ ...newAddress, quarterNo: e.target.value })} />
+                  <input type="text" placeholder="Block (e.g., Block B)" value={newAddress.block} onChange={e => setNewAddress({ ...newAddress, block: e.target.value })} />
+                  <input type="text" placeholder="Label (e.g., Home, Office) - Optional" value={newAddress.label} onChange={e => setNewAddress({ ...newAddress, label: e.target.value })} />
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <button onClick={() => saveAddress(newAddress)} className="btn-primary" style={{ flex: 1 }}>Save</button>
+                    <button onClick={() => { setShowAddAddress(false); setEditingAddress(null); }} className="btn-secondary">Cancel</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {savedAddresses.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem' }}>No saved addresses.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: '0.75rem' }}>
+                {savedAddresses.map(addr => (
+                  <div key={addr.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: 'var(--surface)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+                      <Icons.MapPin />
+                      <div>
+                        {addr.label && <span style={{ fontWeight: 600, display: 'block', fontSize: '0.9rem' }}>{addr.label}</span>}
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Quarter {addr.quarterNo}, {addr.block}</span>
+                        {addr.isDefault && <span className="badge-primary" style={{ marginLeft: '0.5rem', fontSize: '0.7rem' }}>Default</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      {!addr.isDefault && (
+                        <button onClick={() => setDefaultAddress(addr.id)} className="icon-button" title="Set Default" style={{ fontSize: '0.8rem', padding: '0.25rem 0.5rem' }}>
+                          Set Default
+                        </button>
+                      )}
+                      <button onClick={() => { setEditingAddress(addr); setNewAddress({ quarterNo: addr.quarterNo, block: addr.block, label: addr.label || '' }); setShowAddAddress(true); }} className="icon-button" title="Edit">
+                        ✏️
+                      </button>
+                      <button onClick={() => deleteAddress(addr.id)} className="icon-button" title="Delete" style={{ color: 'var(--error)' }}>
+                        <Icons.Trash />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+      )}
+        </div >
       );
     }
 
@@ -1128,7 +1638,10 @@
       const [settings, setSettings] = useState({
         orderingEnabled: true,
         canteenInchargePhone: '',
-        canteenInchargeName: ''
+        canteenInchargeName: '',
+        minOrderValue: 50,
+        deliveryFee: 25,
+        freeDeliveryAbove: 149
       });
       const [loading, setLoading] = useState(true);
       const [error, setError] = useState('');
@@ -1177,9 +1690,9 @@
           <div className="glass-panel" style={{ padding: '1.5rem' }}>
             <div style={{ marginBottom: '1.5rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '1.1rem', fontWeight: 600 }}>
-                <input 
-                  type="checkbox" 
-                  checked={settings.orderingEnabled} 
+                <input
+                  type="checkbox"
+                  checked={settings.orderingEnabled}
                   onChange={e => setSettings({ ...settings, orderingEnabled: e.target.checked })}
                   style={{ width: '1.25rem', height: '1.25rem' }}
                 />
@@ -1192,21 +1705,57 @@
 
             <div className="form-group">
               <label>Canteen In-charge Name</label>
-              <input 
-                type="text" 
-                value={settings.canteenInchargeName} 
+              <input
+                type="text"
+                value={settings.canteenInchargeName}
                 onChange={e => setSettings({ ...settings, canteenInchargeName: e.target.value })}
               />
             </div>
 
             <div className="form-group">
               <label>Canteen In-charge Phone</label>
-              <input 
-                type="tel" 
-                value={settings.canteenInchargePhone} 
+              <input
+                type="tel"
+                value={settings.canteenInchargePhone}
                 onChange={e => setSettings({ ...settings, canteenInchargePhone: e.target.value.replace(/\D/g, '') })}
                 maxLength="10"
               />
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border)', marginTop: '1.5rem', paddingTop: '1.5rem' }}>
+              <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '1rem', color: 'var(--primary)' }}>🚨 Delivery & Order Settings</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+                <div className="form-group">
+                  <label>Min Order Value (₹)</label>
+                  <input
+                    type="number"
+                    value={settings.minOrderValue ?? 50}
+                    onChange={e => setSettings({ ...settings, minOrderValue: parseFloat(e.target.value) || 0 })}
+                    min="0"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Delivery Fee (₹)</label>
+                  <input
+                    type="number"
+                    value={settings.deliveryFee ?? 25}
+                    onChange={e => setSettings({ ...settings, deliveryFee: parseFloat(e.target.value) || 0 })}
+                    min="0"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Free Delivery Above (₹)</label>
+                  <input
+                    type="number"
+                    value={settings.freeDeliveryAbove ?? 149}
+                    onChange={e => setSettings({ ...settings, freeDeliveryAbove: parseFloat(e.target.value) || 0 })}
+                    min="0"
+                  />
+                </div>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
+                Orders below ₹{settings.freeDeliveryAbove ?? 149} will be charged ₹{settings.deliveryFee ?? 25} delivery fee. Min order: ₹{settings.minOrderValue ?? 50}
+              </p>
             </div>
 
             <button onClick={handleUpdate} className="btn-primary" style={{ marginTop: '1rem' }}>
@@ -1222,56 +1771,112 @@
     // ============================================================
     function ActiveOrdersManagement() {
       const [activeOrders, setActiveOrders] = useState([]);
+      const [deliveryStaff, setDeliveryStaff] = useState([]);
+      const [selectedOrder, setSelectedOrder] = useState(null);
+      const [otpInput, setOtpInput] = useState('');
+      const [error, setError] = useState('');
+      const [success, setSuccess] = useState('');
+      const [scanning, setScanning] = useState(false);
 
       useEffect(() => {
-        // Fetch all orders sorted by time
-        const unsubscribe = db.collection('orders')
+        const unsubscribeOrders = db.collection('orders')
           .orderBy('createdAt', 'desc')
           .onSnapshot(snapshot => {
             const orders = snapshot.docs
               .map(doc => ({ id: doc.id, ...doc.data() }))
-              // Filter out delivered ones to only show "Active"
               .filter(order => order.status !== 'delivered');
             setActiveOrders(orders);
           });
-        return unsubscribe;
+
+        const unsubscribeStaff = db.collection('canteen_users')
+          .where('role', '==', 'delivery')
+          .onSnapshot(snapshot => {
+            const staff = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            staff.sort((a, b) => a.id.localeCompare(b.id));
+            setDeliveryStaff(staff);
+          });
+
+        return () => { unsubscribeOrders(); unsubscribeStaff(); };
       }, []);
 
-      // Allow staff to change order status directly from the dashboard
-      // Allow staff to change order status directly from the dashboard
-      const updateStatus = async (order, newStatus) => {
-        // Intercept the 'delivered' status to ask for OTP
-        if (newStatus === 'delivered') {
-          const enteredOtp = prompt(`Please enter the 4-digit Delivery OTP for Order #${order.orderId}:`);
-          
-          // If the admin clicks "Cancel" on the popup
-          if (enteredOtp === null) return; 
-          
-          // If the OTP is incorrect
-          if (enteredOtp !== order.deliveryOTP) {
-            alert('❌ Invalid OTP! Order cannot be marked as delivered.');
-            return; 
-          }
+      useEffect(() => {
+        let html5QrcodeScanner;
+        if (scanning) {
+          html5QrcodeScanner = new window.Html5QrcodeScanner("reader-admin", { 
+            fps: 10, 
+            qrbox: { width: 250, height: 250 },
+            videoConstraints: {
+              facingMode: "environment"
+            },
+            rememberLastUsedCamera: true
+          }, false);
+          html5QrcodeScanner.render(
+            (decodedText) => {
+              if (selectedOrder) {
+                if (decodedText === selectedOrder.orderId) {
+                  html5QrcodeScanner.clear();
+                  setScanning(false);
+                  verifyAndDeliver(selectedOrder, selectedOrder.deliveryOTP);
+                } else {
+                  setError('QR code does not match this order!');
+                }
+              }
+            },
+            (err) => { /* Ignore regular scan errors */ }
+          );
         }
+        return () => {
+          if (html5QrcodeScanner) html5QrcodeScanner.clear().catch(e => console.log('Failed to clear scanner'));
+        };
+      }, [scanning, selectedOrder]);
+
+      const verifyAndDeliver = async (order, otpToVerify) => {
+        if (!otpToVerify) { setError('Please enter OTP or scan QR'); return; }
+        if (otpToVerify !== order.deliveryOTP) { setError('Invalid OTP'); return; }
 
         try {
-          // Prepare the update payload
+          await db.collection('orders').doc(order.id).update({
+            status: 'delivered',
+            deliveredAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          setSuccess(`Order #${order.orderId} marked as delivered!`);
+          setOtpInput('');
+          setSelectedOrder(null);
+          setScanning(false);
+          setTimeout(() => setSuccess(''), 3000);
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const updateStatus = async (order, newStatus) => {
+        try {
           const updateData = { status: newStatus };
-          
-          // Add the timestamp just like the user side does
-          if (newStatus === 'delivered') {
-            updateData.deliveredAt = firebase.firestore.FieldValue.serverTimestamp();
-          }
-          
           await db.collection('orders').doc(order.id).update(updateData);
         } catch (err) {
           alert('Error updating status: ' + err.message);
         }
       };
 
+      const assignOrder = async (order, staffId) => {
+        if (!staffId) return;
+        try {
+          await db.collection('orders').doc(order.id).update({
+            assignedTo: staffId,
+            status: 'ready for delivery' // Automatically update status when assigned
+          });
+        } catch (err) {
+          alert('Error assigning order: ' + err.message);
+        }
+      };
+
       return (
         <div style={{ padding: '1.5rem' }}>
           <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem' }}>Live Active Orders</h2>
+          
+          {error && <div className="alert-warning" style={{ marginBottom: '1rem' }}>{error}</div>}
+          {success && <div className="alert-success" style={{ marginBottom: '1rem' }}>{success}</div>}
+
           {activeOrders.length === 0 ? (
             <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>
               <Icons.Package />
@@ -1281,36 +1886,271 @@
             <div style={{ display: 'grid', gap: '1rem' }}>
               {activeOrders.map(order => (
                 <div key={order.id} className="glass-panel" style={{ padding: '1.5rem', borderLeft: '4px solid var(--primary)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
                     <div>
                       <h4 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Order #{order.orderId}</h4>
                       <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                         <Icons.User /> {order.userName} ({order.userId}) | <Icons.Clock /> {order.createdAt?.toDate().toLocaleString()}
                       </p>
+                      {order.deliveryAddress && (
+                        <p style={{ fontSize: '0.9rem', marginTop: '0.5rem', color: 'var(--primary)', fontWeight: 500 }}>
+                          <Icons.MapPin /> Delivery: Quarter {order.deliveryAddress.quarterNo}, {order.deliveryAddress.block}
+                        </p>
+                      )}
                     </div>
-                    <select 
-                      value={order.status} 
-                      onChange={(e) => updateStatus(order, e.target.value)}
-                      style={{ padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid var(--border)', background: 'var(--surface)', fontWeight: 600 }}
-                    >
-                      <option value="pending">Pending</option>
-                      <option value="accepted & preparing">Accepted & Preparing</option>
-                      <option value="ready for delivery">Ready for delivery</option>
-                      <option value="delivered">Mark as Delivered</option>
-                    </select>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <select
+                        value={order.assignedTo || ''}
+                        onChange={(e) => assignOrder(order, e.target.value)}
+                        style={{ padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid var(--primary)', background: 'var(--surface)', fontWeight: 600, color: 'var(--primary)' }}
+                      >
+                        <option value="" disabled>Assign to Delivery Man</option>
+                        {deliveryStaff.map(staff => (
+                          <option key={staff.id} value={staff.id}>{staff.id} - {staff.name}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={order.status}
+                        onChange={(e) => updateStatus(order, e.target.value)}
+                        style={{ padding: '0.5rem', borderRadius: '0.375rem', border: '1px solid var(--border)', background: 'var(--surface)', fontWeight: 600 }}
+                      >
+                        <option value="pending">Pending</option>
+                        <option value="accepted & preparing">Accepted & Preparing</option>
+                        <option value="ready for delivery">Ready for delivery</option>
+                      </select>
+                    </div>
                   </div>
                   <div style={{ marginBottom: '1rem', background: 'var(--background)', padding: '1rem', borderRadius: '0.375rem' }}>
                     {order.items.map((item, idx) => (
                       <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0' }}>
-                        <span><strong style={{color: 'var(--primary)'}}>{item.quantity}x</strong> {item.name}</span>
-                        <span style={{ fontWeight: 500 }}>₹{(item.price * item.quantity).toFixed(2)}</span>
+                        <span><strong style={{ color: 'var(--primary)' }}>{item.quantity}x</strong> {item.name}</span>
+                        <span style={{ fontWeight: 500 }}>{formatPrice(item.price * item.quantity)}</span>
                       </div>
                     ))}
                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.5rem', marginTop: '0.5rem', borderTop: '1px solid var(--border)', fontWeight: 700 }}>
                       <span>Total:</span>
-                      <span style={{ color: 'var(--primary)' }}>₹{order.totalAmount.toFixed(2)}</span>
+                      <span style={{ color: 'var(--primary)' }}>{formatPrice(order.totalAmount)}</span>
                     </div>
                   </div>
+
+                  <div style={{ border: '2px solid #000', padding: '1rem', borderRadius: '0.375rem', background: 'var(--surface)' }}>
+                    <h5 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Icons.Check /> Complete Delivery
+                    </h5>
+                    
+                    {scanning && selectedOrder?.id === order.id ? (
+                      <div>
+                        <div id="reader-admin" style={{ width: '100%', maxWidth: '400px', margin: '0 auto 1rem auto' }}></div>
+                        <button onClick={() => { setScanning(false); setSelectedOrder(null); setError(''); }} className="btn-secondary" style={{ width: '100%' }}>Cancel Scan</button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button 
+                          onClick={() => { setSelectedOrder(order); setScanning(true); setError(''); setOtpInput(''); }} 
+                          className="btn-primary" 
+                          style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                        >
+                          <Icons.Scan /> Scan QR
+                        </button>
+                        
+                        <div style={{ flex: 1, display: 'flex', gap: '0.5rem', minWidth: '200px' }}>
+                          <input 
+                            type="text" 
+                            placeholder="Or enter OTP manually" 
+                            value={selectedOrder?.id === order.id ? otpInput : ''}
+                            onChange={e => { setSelectedOrder(order); setOtpInput(e.target.value); }}
+                            maxLength="4"
+                            style={{ flex: 1 }}
+                          />
+                          <button onClick={() => verifyAndDeliver(order, otpInput)} className="btn-primary" disabled={!otpInput || selectedOrder?.id !== order.id}>
+                            Submit
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ============================================================
+    // DELIVERY DASHBOARD COMPONENT
+    // ============================================================
+    function DeliveryDashboard({ currentUser }) {
+      const [assignedOrders, setAssignedOrders] = useState([]);
+      const [selectedOrder, setSelectedOrder] = useState(null);
+      const [otpInput, setOtpInput] = useState('');
+      const [error, setError] = useState('');
+      const [success, setSuccess] = useState('');
+      const [scanning, setScanning] = useState(false);
+
+      useEffect(() => {
+        const unsubscribe = db.collection('orders')
+          .where('assignedTo', '==', currentUser.id)
+          .where('status', 'in', ['ready for delivery', 'out for delivery'])
+          .onSnapshot(snapshot => {
+            const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setAssignedOrders(orders);
+          });
+        return unsubscribe;
+      }, [currentUser.id]);
+
+      useEffect(() => {
+        let html5QrcodeScanner;
+        if (scanning) {
+          html5QrcodeScanner = new window.Html5QrcodeScanner("reader", { 
+            fps: 10, 
+            qrbox: { width: 250, height: 250 },
+            videoConstraints: {
+              facingMode: "environment"
+            },
+            rememberLastUsedCamera: true
+          }, false);
+          html5QrcodeScanner.render(
+            (decodedText) => {
+              if (selectedOrder) {
+                if (decodedText === selectedOrder.orderId) {
+                  html5QrcodeScanner.clear();
+                  setScanning(false);
+                  verifyAndDeliver(selectedOrder, selectedOrder.deliveryOTP); // Auto-verify if QR matches
+                } else {
+                  setError('QR code does not match this order!');
+                }
+              }
+            },
+            (err) => { /* Ignore regular scan errors */ }
+          );
+        }
+        return () => {
+          if (html5QrcodeScanner) html5QrcodeScanner.clear().catch(e => console.log('Failed to clear scanner'));
+        };
+      }, [scanning, selectedOrder]);
+
+      const verifyAndDeliver = async (order, otpToVerify) => {
+        if (!otpToVerify) { setError('Please enter OTP or scan QR'); return; }
+        if (otpToVerify !== order.deliveryOTP) { setError('Invalid OTP'); return; }
+
+        try {
+          await db.collection('orders').doc(order.id).update({
+            status: 'delivered',
+            deliveredAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          setSuccess('Order marked as delivered!');
+          setOtpInput('');
+          setSelectedOrder(null);
+          setScanning(false);
+          setTimeout(() => setSuccess(''), 3000);
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      const markOutForDelivery = async (order) => {
+        try {
+          await db.collection('orders').doc(order.id).update({ status: 'out for delivery' });
+        } catch (err) {
+          setError(err.message);
+        }
+      };
+
+      return (
+        <div style={{ padding: '1.5rem' }}>
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 600, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Icons.Truck /> My Deliveries
+          </h2>
+
+          {error && <div className="alert-warning" style={{ marginBottom: '1rem' }}>{error}</div>}
+          {success && <div className="alert-success" style={{ marginBottom: '1rem' }}>{success}</div>}
+
+          {assignedOrders.length === 0 ? (
+            <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>
+              <Icons.Package />
+              <p style={{ marginTop: '1rem', color: 'var(--text-secondary)' }}>No pending deliveries assigned to you.</p>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              {assignedOrders.map(order => (
+                <div key={order.id} className="glass-panel" style={{ padding: '1.5rem', borderLeft: '4px solid var(--primary)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+                    <div>
+                      <h4 style={{ fontSize: '1.1rem', fontWeight: 600 }}>Order #{order.orderId}</h4>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        <Icons.User /> {order.userName} | {order.userPhone}
+                      </p>
+                    </div>
+                    <span className="badge-warning">{order.status.toUpperCase()}</span>
+                  </div>
+
+                  {order.deliveryAddress && (
+                    <div style={{ background: 'var(--background)', padding: '1rem', borderRadius: '0.375rem', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                      <h5 style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--primary)' }}>
+                        <Icons.MapPin /> Delivery Location
+                      </h5>
+                      <p style={{ fontSize: '1rem', fontWeight: 500 }}>
+                        Quarter {order.deliveryAddress.quarterNo}, {order.deliveryAddress.block}
+                      </p>
+                      {order.deliveryAddress.label && <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>({order.deliveryAddress.label})</p>}
+                    </div>
+                  )}
+
+                  <div style={{ marginBottom: '1rem' }}>
+                    <p style={{ fontWeight: 600, marginBottom: '0.5rem' }}>Items to deliver:</p>
+                    {order.items.map((item, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', fontSize: '0.9rem' }}>
+                        <span>{item.quantity}x {item.name}</span>
+                      </div>
+                    ))}
+                    <div style={{ fontWeight: 700, marginTop: '0.5rem', color: 'var(--primary)' }}>
+                      To Collect: {formatPrice(order.totalAmount)}
+                    </div>
+                  </div>
+
+                  {order.status === 'ready for delivery' && (
+                    <button onClick={() => markOutForDelivery(order)} className="btn-primary" style={{ width: '100%' }}>
+                      Start Delivery
+                    </button>
+                  )}
+
+                  {order.status === 'out for delivery' && (
+                    <div style={{ background: 'var(--surface)', padding: '1rem', borderRadius: '0.375rem', border: '1px dashed var(--border)' }}>
+                      <h5 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '1rem' }}>Complete Delivery</h5>
+
+                      {scanning && selectedOrder?.id === order.id ? (
+                        <div>
+                          <div id="reader" style={{ width: '100%', maxWidth: '400px', margin: '0 auto 1rem auto' }}></div>
+                          <button onClick={() => { setScanning(false); setSelectedOrder(null); }} className="btn-secondary" style={{ width: '100%' }}>Cancel Scan</button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button
+                            onClick={() => { setSelectedOrder(order); setScanning(true); setError(''); }}
+                            className="btn-primary"
+                            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                          >
+                            <Icons.Scan /> Scan QR
+                          </button>
+
+                          <div style={{ flex: 1, display: 'flex', gap: '0.5rem', minWidth: '200px' }}>
+                            <input
+                              type="text"
+                              placeholder="Or enter OTP"
+                              value={selectedOrder?.id === order.id ? otpInput : ''}
+                              onChange={e => { setSelectedOrder(order); setOtpInput(e.target.value); }}
+                              maxLength="4"
+                              style={{ flex: 1 }}
+                            />
+                            <button onClick={() => verifyAndDeliver(order, otpInput)} className="btn-primary" disabled={!otpInput || selectedOrder?.id !== order.id}>
+                              <Icons.Check />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1325,10 +2165,73 @@
     function Dashboard({ currentUser, logout }) {
       const isAdmin = currentUser.role === 'admin';
       const isCanteenIncharge = currentUser.role === 'canteen_incharge';
+      const isDelivery = currentUser.role === 'delivery';
       const canManageMenu = isAdmin || isCanteenIncharge;
 
-      // FIX: Set default view based on role
-      const [activeView, setActiveView] = useState(canManageMenu ? 'active_orders' : 'home');
+      const [activeView, setActiveView] = useState(
+        isDelivery ? 'delivery_dashboard' : canManageMenu ? 'active_orders' : 'home'
+      );
+
+      React.useEffect(() => {
+        if (currentUser.role !== 'incharge') return;
+
+        if (Notification.permission === "default") {
+          Notification.requestPermission();
+        }
+
+        const now = firebase.firestore.Timestamp.now();
+
+        const unsubscribe = db.collection('orders')
+          .where('status', '==', 'pending')
+          .where('createdAt', '>', now)
+          .onSnapshot((snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === "added") {
+                const newOrder = change.doc.data();
+                triggerNewOrderAlert(newOrder);
+              }
+            });
+          }, (error) => {
+            console.error("Listener failed:", error);
+          });
+
+        return () => unsubscribe();
+      }, [currentUser]);
+
+      const triggerNewOrderAlert = (order) => {
+        const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+        audio.play().catch(e => console.log("Audio play blocked until user interacts with page."));
+
+        if (Notification.permission === "granted") {
+          new Notification("New Canteen Order! 🍔", {
+            body: `Order for ₹${order.totalAmount} from ${order.userName}`,
+            icon: "https://cdn-icons-png.flaticon.com/512/3443/3443338.png",
+            tag: "new-order",
+          });
+        }
+
+        if ("vibrate" in navigator) {
+          navigator.vibrate([200, 100, 200]);
+        }
+      };
+
+      // Delivery specific view without other navigation
+      if (isDelivery) {
+        return (
+          <div style={{ minHeight: '100vh', background: 'var(--background)' }}>
+            <div className="glass-panel" style={{ padding: '1rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0' }}>
+              <div>
+                <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--primary)' }}>🍽️ Delivery</h1>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Welcome, {currentUser.name}</p>
+              </div>
+              <button onClick={logout} className="btn-secondary">
+                <Icons.LogOut /> Logout
+              </button>
+            </div>
+            <DeliveryDashboard currentUser={currentUser} />
+          </div>
+        );
+      }
 
       return (
         <div style={{ minHeight: '100vh', background: 'var(--background)' }}>
@@ -1345,21 +2248,23 @@
 
           {/* Navigation */}
           <div className="glass-panel" style={{ padding: '1rem 1.5rem', margin: '1rem 0', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            {/* New Active Orders Tab */}
             {canManageMenu && (
               <button onClick={() => setActiveView('active_orders')} className={activeView === 'active_orders' ? 'btn-primary' : 'btn-secondary'}>
                 <Icons.Package /> Active Orders
               </button>
             )}
-            
+
             <button onClick={() => setActiveView('home')} className={activeView === 'home' ? 'btn-primary' : 'btn-secondary'}>
               <Icons.ShoppingCart /> Order Food
             </button>
-            
+
             {canManageMenu && (
               <>
                 <button onClick={() => setActiveView('menu')} className={activeView === 'menu' ? 'btn-primary' : 'btn-secondary'}>
                   <Icons.Menu /> Menu Management
+                </button>
+                <button onClick={() => setActiveView('delivery_staff')} className={activeView === 'delivery_staff' ? 'btn-primary' : 'btn-secondary'}>
+                  <Icons.Truck /> Delivery Staff
                 </button>
                 <button onClick={() => setActiveView('settings')} className={activeView === 'settings' ? 'btn-primary' : 'btn-secondary'}>
                   <Icons.Settings /> Settings
@@ -1378,6 +2283,7 @@
             {activeView === 'active_orders' && canManageMenu && <ActiveOrdersManagement />}
             {activeView === 'home' && <UserOrdering currentUser={currentUser} />}
             {activeView === 'menu' && canManageMenu && <MenuManagement currentUser={currentUser} />}
+            {activeView === 'delivery_staff' && canManageMenu && <DeliveryManManagement />}
             {activeView === 'settings' && canManageMenu && <CanteenSettings />}
             {activeView === 'personnel' && isAdmin && <PersonnelManagement />}
           </div>
@@ -1427,7 +2333,7 @@
       const handleLogin = async (e) => {
         e.preventDefault();
         setAuthError('');
-        
+
         try {
           const email = `${loginId}@canteen.internal`;
           await auth.signInWithEmailAndPassword(email, loginPw);
