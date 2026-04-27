@@ -1802,7 +1802,14 @@
       useEffect(() => {
         let html5QrcodeScanner;
         if (scanning) {
-          html5QrcodeScanner = new window.Html5QrcodeScanner("reader-admin", { fps: 10, qrbox: { width: 250, height: 250 } }, false);
+          html5QrcodeScanner = new window.Html5QrcodeScanner("reader-admin", { 
+            fps: 10, 
+            qrbox: { width: 250, height: 250 },
+            videoConstraints: {
+              facingMode: "environment"
+            },
+            rememberLastUsedCamera: true
+          }, false);
           html5QrcodeScanner.render(
             (decodedText) => {
               if (selectedOrder) {
@@ -1995,7 +2002,14 @@
       useEffect(() => {
         let html5QrcodeScanner;
         if (scanning) {
-          html5QrcodeScanner = new window.Html5QrcodeScanner("reader", { fps: 10, qrbox: { width: 250, height: 250 } }, false);
+          html5QrcodeScanner = new window.Html5QrcodeScanner("reader", { 
+            fps: 10, 
+            qrbox: { width: 250, height: 250 },
+            videoConstraints: {
+              facingMode: "environment"
+            },
+            rememberLastUsedCamera: true
+          }, false);
           html5QrcodeScanner.render(
             (decodedText) => {
               if (selectedOrder) {
